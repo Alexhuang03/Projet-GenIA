@@ -1,0 +1,13 @@
+{
+  "dossier_id": "SIMU-20261106-87FA03",
+  "created_at": "2026-11-06T15:40:18.953138",
+  "statut": "ENREGISTRE_ET_VALIDE",
+  "simulation_data": {
+    "distance_km": 270.0,
+    "total_points_charge": 7,
+    "echelon_estime": "7",
+    "bourse_annuelle_euros": 6335.0,
+    "bourse_mensuelle_euros": 633.5,
+    "apl_mensuelle_estimee": 0.0
+  }
+}
