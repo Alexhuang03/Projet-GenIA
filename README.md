@@ -1,123 +1,94 @@
 # Un système génératif qui se mesure : Assistant Aides Étudiantes & CROUS
 **Projet Mineur IA Générative 2026 · Dr. Issam Falih**  
-**Parcours : Texte · Chapitres 4 à 6**
+**Parcours : Texte · SEMAINE 1 (2 – 8 nov.)**
 
 ---
 
-## 1. Présentation du Projet et Cas d'Usage
+## 1. Objectif et Règle du Jeu de la Semaine 1
 
-Ce projet met en œuvre un assistant intelligent dédié à l'information, au calcul et à l'orientation pour les aides étudiantes en France (Bourses CROUS sur critères sociaux, Logement universitaire, Garantie Visale, APL / CAF, Aides d'urgence FNAU, Santé et Mobilité).
+> *« Le projet n’est pas jugé sur le nombre de techniques empilées, mais sur votre capacité à montrer, mesures à l’appui, ce que chaque technique apporte, ce qu’elle coûte et où elle échoue. Commencer simple, et ne passer au niveau suivant que lorsqu’une mesure montre qu’il aide. »*  
+> — Dr. Issam Falih
 
-Conformément à la consigne du cours, le système est construit par **niveaux successifs**, où chaque niveau prouve rigoureusement ce qu'il apporte, ce qu'il coûte et où il échoue, mesuré sur un protocole de test standardisé :
-
-```
-Niveau 0 (LLM seul)  --->  Niveau 1 (RAG Hybride)  --->  Niveau 2 (Agent Outillé)  --->  Niveau 3 (Extension)
-(Baseline à battre)       (Sources + Abstention)        (Actions + Contrôle Code)       (Planification / HyDE)
-```
-
----
-
-## 2. Architecture par Niveaux
-
-### • Niveau 0 : LLM seul (Baseline)
-- **Principe** : Un prompt système soigné définissant le rôle de l'assistant étudiant, mais **sans aucun document externe** et **sans outil de calcul**.
-- **Comportement mesuré** : Réponses plausibles mais souvent imprécises sur les barèmes exacts (montants, distances, seuils kilométriques), aucune citation de source officielle et incapacité à s'abstenir formellement ou à accomplir une démarche.
-
-### • Niveau 1 : RAG (Retrieval-Augmented Generation)
-- **Découpage (Chunking)** : Segmentation par paragraphes et sections Markdown préservant la hiérarchie des titres (`[Nom de Section]`).
-  - *Justification* : Les règles administratives associent strictement les chiffres (montant d'un échelon, seuil de distance) au titre de la condition.
-- **Recherche Hybride (Dense + BM25)** :
-  - **Dense TF-IDF normalisé avec n-grammes (1, 2)** pour capturer les expressions composées ("points de charge", "échelon 0bis", "dossier social étudiant").
-  - **BM25 Okapi** pour la correspondance lexicale stricte des valeurs numériques.
-- **Citations et Abstention** :
-  - Chaque affirmation cite explicitement son document source : `[Source: nom_fichier.md]`.
-  - **Groundedness & Détection d'abstention** : Si le score de pertinence est insuffisant ou si la question ne relève pas du corpus, le modèle s'abstient formellement au lieu d'halluciner.
-
-### • Niveau 2 : Agent outillé
-- **Conception SANS framework** : La boucle ReAct, l'ordonnancement des outils et la gestion des observations sont développés en pur Python, sans dépendance à LangChain ou LangGraph.
-- **Registre des 3 outils (Schéma JSON)** :
-  1. `calculer_points_charge` *(Lecture / Calcul)* : Calcule la distance kilométrique et les points fratrie.
-  2. `estimer_bourse_et_apl` *(Lecture / Simulation)* : Détermine l'échelon indicatif et l'aide mensuelle.
-  3. `sauvegarder_dossier_etudiant` *(Action / Écriture irréversible)* : Exporte et archive la synthèse au format JSON et Markdown dans `exports/`.
-- **Règles métier vérifiées par du code** : Les barèmes kilométriques (<30km = 0pt, 30-249km = 1pt, >=250km = 2pts) et les plafonds sont garantis par le code Python et non confiés au LLM.
-- **Validation humaine obligatoire** : Toute action irréversible (`sauvegarder_dossier_etudiant`) interrompt la boucle et exige la confirmation explicite de l'utilisateur (`WAITING_CONFIRMATION`).
+Conformément au calendrier officiel, la **Semaine 1** établit les fondations rigoureuses du projet :
+1. **Le Thème** et le cas d'usage retenus.
+2. **Le Corpus** documentaire de référence.
+3. **Le Jeu de test standardisé** de 40 cas (`data/tests.jsonl`).
+4. **Le Niveau 0 (LLM seul)** : la référence à battre, avec son évaluation chiffrée.
 
 ---
 
-## 3. Protocole de Test et Évaluation (`eval.py`)
+## 2. Thème Retenu : Assistant Aides Étudiantes & CROUS
 
-Le jeu de test `data/tests.jsonl` contient **40 cas rigoureusement calibrés** :
-- **20 cas "Réponse dans les documents"** : Vérifie l'exactitude de la réponse et la présence de la citation de source.
-- **5 cas "Réponse absente des documents"** : Vérifie l'abstention formelle du système sans hallucination.
-- **10 cas "Tâches en plusieurs étapes"** : État final (points de charge, échelon, archivage) validé par du code strict, mesuré avec la métrique **pass^3** (3 exécutions consécutives réussies).
-- **5 cas "Demandes ambiguës ou hors sujet"** : Demande de clarification ou refus poli.
+Le système est conçu pour guider les étudiants dans l'évaluation et l'obtention de leurs aides :
+- Bourses de l'enseignement supérieur sur critères sociaux (BCS) gérées par le CROUS.
+- Logement en résidence universitaire et cautionnement gratuit **Visale** (Action Logement).
+- Aide Personnalisée au Logement (**APL**) gérée par la CAF.
+- Fonds National d'Aide d'Urgence (**FNAU** / ASAA) pour les situations de rupture.
+- Aides à la mobilité (Master 1 000 €, Parcoursup 500 €, mobilité internationale 400 €/mois).
+- Restauration (repas à 1 €) et santé étudiante (Santé Psy Étudiant).
 
-### Tableau comparatif des résultats (généré par `python eval.py`)
+---
+
+## 3. Le Corpus Documentaire (`data/corpus/`)
+
+Le corpus est composé de 6 fiches officielles au format Markdown :
+- `01_bourses_crous_criteres_sociaux.md` : conditions, barème kilométrique, fratrie, échelons 0bis à 7, plafonds RFR.
+- `02_logement_crous_et_visale.md` : résidences universitaires, indice social, garantie Visale (36 mensualités), avance Loca-Pass (1 200 € max).
+- `03_aide_personnalisee_logement_apl.md` : éligibilité CAF, non-imposition des bourses, impact direct sur les prestations des parents.
+- `04_aides_urgence_crous_fnausu.md` : aide d'urgence ponctuelle (plafond de 3 070 €/an), allocation annuelle, repas à 1 € pour non-boursiers précaires.
+- `05_aides_transport_restauration_sante.md` : tarification des repas (3,30 € / 1 €), forfait Imagine R (374,40 €), 8 séances gratuites chez le psychologue.
+- `06_aide_mobilite_master_parcoursup.md` : aide Master 1 000 €, Parcoursup 500 €, aide mobilité internationale 400 €/mois.
+
+---
+
+## 4. Protocole de Test et Jeu d'Évaluation (`data/tests.jsonl`)
+
+Un protocole rigoureux de **40 cas de test** a été fixé dès cette première semaine, conforme aux 4 catégories du barème :
+- **20 cas "Réponse dans les documents"** : questions précises sur les barèmes, montants et conditions.
+- **5 cas "Réponse absente des documents"** : questions hors sujet (ex: achat de voilier, élevage de lamas) pour mesurer l'abstention.
+- **10 cas "Tâches en plusieurs étapes"** : cas de calcul et de simulation d'aides.
+- **5 cas "Demandes ambiguës ou hors sujet"** : requêtes vagues ou illégales pour tester le cadrage du modèle.
+
+---
+
+## 5. Niveau 0 : LLM seul (Baseline de Référence)
+
+### Conception
+Le Niveau 0 s'appuie sur un **prompt système soigné** définissant le rôle de l'assistant étudiant, mais **sans accès aux documents officiels et sans outils**.
+
+### Résultats Mesurés (`python eval.py`)
 
 | Niveau | Recall@5 | Exactitude | Abstention | Succès tâches | pass^3 | Tokens / req | Latence |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **0 · LLM seul** | — | 5.0% | 0.0% | — | — | 86.1 | 0.000s |
-| **1 · RAG** | 100.0% (MRR: 1.00) | 100.0% | 100.0% | — | — | 517.5 | 0.001s |
-| **2 · Agent** | 100.0% | 95.0% | 100.0% | 100.0% | 100.0% | 437.7 | 0.002s |
+| **0 · LLM seul** | — | **5.0%** | **0.0%** | — | — | **86.1** | **0.001s** |
+| **1 · RAG** | … | … | … | — | — | … | … |
+| **2 · Agent** | … | … | … | … | … | … | … |
+| **3 · Extension** | … | … | … | … | … | … | … |
+
+### Analyse d'échec du Niveau 0 (Justification du passage au RAG en Semaine 2)
+1. **Faible exactitude (5.0%)** : Le LLM seul donne des approximations plausibles mais fausses sur les montants exacts (ex: il ignore le montant exact de 1 454 € pour l'échelon 0bis ou de 3 070 € pour l'aide d'urgence).
+2. **Absence totale d'abstention (0.0%)** : Lorsqu'on l'interroge sur une subvention fictive de voilier, il tente d'inventer une réponse au lieu de s'abstenir formellement.
+3. **Sources absentes** : Aucune affirmation ne peut être vérifiée par l'étudiant.
+
+👉 **Conclusion de la Semaine 1** : Ces faiblesses quantifiées justifient pleinement l'introduction du RAG (Niveau 1) dès la Semaine 2.
 
 ---
 
-## 4. Installation et Prise en Main
+## 6. Utilisation
 
-### Prérequis
-- Python 3.10 ou supérieur.
-- Aucun GPU n'est requis.
-- Fonctionne immédiatement hors-ligne grâce au mode Mock déterministe intégré, ou avec des clés API en ligne (Gemini, Groq, OpenAI).
-
-### 1. Installation des dépendances
+### 1. Installation
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configuration des clés (optionnel)
-Copiez `.env.example` en `.env` si vous souhaitez utiliser une clé d'API réelle :
-```bash
-cp .env.example .env
-```
-
-### 3. Reproduire le tableau d'évaluation (commande unique)
+### 2. Reproduire l'évaluation de la Semaine 1
 ```bash
 python eval.py
 ```
 
-### 4. Lancer l'interface utilisateur Streamlit
+### 3. Lancer l'interface Streamlit (Niveau 0)
 ```bash
 streamlit run app.py
 ```
 
----
-
-## 5. Structure du Dépôt
-
-```
-Projet/
-├── data/
-│   ├── corpus/                # Documents réglementaires officiels (.md)
-│   ├── tests.jsonl            # Protocole des 40 cas de test calibrés
-│   └── traces.jsonl           # Traces de chaque exécution (tokens, étapes, durée)
-├── src/
-│   ├── baseline/
-│   │   └── level0_llm.py      # Niveau 0 : LLM seul sans documents ni outils
-│   ├── rag/
-│   │   ├── chunking.py        # Découpage avec métadonnées de section
-│   │   ├── retriever.py       # Recherche hybride Dense + BM25 avec seuil d'abstention
-│   │   └── engine.py          # Niveau 1 : RAG avec citations et abstention
-│   ├── agent/
-│   │   ├── business_rules.py  # Règles métier strictes vérifiées par le code
-│   │   ├── tools.py           # Schémas JSON des 3 outils classés par effet
-│   │   └── loop.py            # Boucle ReAct bornée SANS framework avec validation
-│   ├── config.py              # Chemins et paramètres globaux
-│   ├── llm_client.py          # Client multi-providers (Mock, Gemini, Groq, OpenAI)
-│   └── tracker.py             # Enregistrement des traces JSONL
-├── exports/                   # Dossiers étudiants générés par l'agent
-├── app.py                     # Interface interactive Streamlit
-├── eval.py                    # Script d'évaluation unifié
-├── requirements.txt           # Dépendances Python
-├── .env.example               # Modèle de configuration des variables d'environnement
-└── README.md                  # Documentation du projet
-```
+*(Note : Les développements des semaines 2 et 3 sont conservés et sauvegardés sur la branche `avance-semaines-2-3`).*
