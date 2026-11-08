@@ -70,7 +70,7 @@ Le Niveau 0 s'appuie sur un **prompt système soigné** définissant le rôle de
 2. **Absence totale d'abstention (0.0%)** : Lorsqu'on l'interroge sur une subvention fictive de voilier, il tente d'inventer une réponse au lieu de s'abstenir formellement.
 3. **Sources absentes** : Aucune affirmation ne peut être vérifiée par l'étudiant.
 
-👉 **Conclusion de la Semaine 1** : Ces faiblesses quantifiées justifient pleinement l'introduction du RAG (Niveau 1) dès la Semaine 2.
+**Conclusion de la Semaine 1** : Ces faiblesses quantifiées justifient pleinement l'introduction du RAG (Niveau 1) dès la Semaine 2.
 
 ---
 
