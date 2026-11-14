@@ -1,120 +1,197 @@
 """
-Script d'évaluation officiel - SEMAINE 1 (python eval.py)
+Évaluation reproductible du système (python eval.py)
 Parcours Texte : Assistant Aides Étudiantes & CROUS
-Évalue le Niveau 0 (LLM seul / baseline à battre) sur les 40 cas de tests.jsonl.
-Conforme au format indicatif du tableau attendu par le Dr. Issam Falih.
+
+Mesure sur le jeu de test figé data/tests.jsonl :
+- Niveau 0 (LLM seul) et Niveau 1 (RAG) sur les 20 questions « dans les documents »
+  et les 5 questions « hors documents » ;
+- une ablation du retriever (BM25 / dense / hybride), sans appel au LLM.
+Les tâches multi-étapes (Niveau 2, agent) seront ajoutées en semaine 3.
+
+Sorties : tableau Markdown à l'écran, results/latest.md, et results/eval_<horodatage>.json
+(résumé + détail de chaque cas : réponse, passages récupérés, citations), pour l'analyse d'échecs.
+
+Usage :
+    python eval.py                       # niveaux 0 et 1, retriever hybride
+    python eval.py --levels 1 --retriever bm25
+    python eval.py --limit 5             # essai rapide sur 5 cas par catégorie
 """
+import argparse
 import json
 import time
-from typing import Dict, Any, List
-from pathlib import Path
+from datetime import datetime
+from typing import Any, Dict, List
 
-from src.config import TESTS_PATH
+from src.config import TESTS_PATH, RESULTS_DIR, RAG_TOP_K
 from src.llm_client import UnifiedLLMClient
 from src.baseline.level0_llm import Level0LLM
+from src.rag.retriever import Retriever
+from src.rag.engine import RAGEngine
+from src.metrics import contains_keyword, is_abstention, mean
 
 
 def load_test_cases() -> List[Dict[str, Any]]:
-    if not TESTS_PATH.exists():
-        raise FileNotFoundError(f"Fichier de test introuvable : {TESTS_PATH}")
-    cases = []
-    with open(TESTS_PATH, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                cases.append(json.loads(line.strip()))
-    return cases
+    with open(TESTS_PATH, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
-def evaluate_level_0(client: UnifiedLLMClient, cases: List[Dict[str, Any]]) -> Dict[str, Any]:
-    print("\nÉvaluation du Niveau 0 (LLM seul)...")
-    model = Level0LLM(client)
-    
-    in_corpus_cases = [c for c in cases if c["category"] == "in_corpus"]
-    out_corpus_cases = [c for c in cases if c["category"] == "out_of_corpus"]
-    
-    # Mesure de l'exactitude sur les questions documentaires (sans corpus)
-    correct_count = 0
-    total_tokens = 0
-    total_latency = 0.0
-    
-    for case in in_corpus_cases:
+def pct(x: float) -> str:
+    return f"{100 * x:.1f}%"
+
+
+# --------------------------------------------------------------------------- retriever
+def retrieval_ablation(client, cases) -> Dict[str, Dict[str, float]]:
+    """Recall@5 de chaque mode de recherche, sans LLM.
+    - niveau document : le fichier attendu figure parmi les 5 passages ;
+    - niveau passage  : un des 5 passages contient la réponse attendue (mot-clé de référence)."""
+    out = {}
+    for mode in ("bm25", "dense", "hybrid"):
+        r = Retriever(client, mode=mode)
+        doc_hits, passage_hits, top1 = [], [], []
+        for c in cases:
+            res = r.retrieve(c["query"], top_k=RAG_TOP_K)
+            docs = [x.chunk.doc_name for x in res]
+            doc_hits.append(c["expected_source"] in docs)
+            top1.append(docs[0] == c["expected_source"])
+            passage_hits.append(any(contains_keyword(x.chunk.content, c["expected_keywords"]) for x in res))
+        out[mode] = {"recall_doc@1": mean(top1), "recall_doc@5": mean(doc_hits),
+                     "recall_passage@5": mean(passage_hits)}
+    return out
+
+
+# --------------------------------------------------------------------------- niveaux
+def run_level(level: int, system, doc_cases, abs_cases) -> Dict[str, Any]:
+    details = []
+    for case in doc_cases + abs_cases:
         t0 = time.time()
-        res = model.process(case["query"])
-        lat = time.time() - t0
-        total_latency += lat
-        total_tokens += res["trace"]["total_tokens"]
-        
-        # Vérification si le LLM seul trouve par hasard les chiffres exacts
-        resp_text = res["response"].lower()
-        if any(kw.lower() in resp_text for kw in case["expected_keywords"]):
-            correct_count += 1
-            
-    # Mesure de l'abstention sur les questions hors corpus
-    abstention_count = 0
-    for case in out_corpus_cases:
-        t0 = time.time()
-        res = model.process(case["query"])
-        total_latency += (time.time() - t0)
-        total_tokens += res["trace"]["total_tokens"]
-        
-        resp_text = res["response"].lower()
-        if any(w in resp_text for w in ["ne dispose pas", "je ne sais pas", "pas d'information", "aucun texte"]):
-            abstention_count += 1
+        res = system.process(case["query"])
+        latency = time.time() - t0
+        text = res["response"]
+        abstained = is_abstention(text)
+        row = {
+            "id": case["id"], "category": case["category"], "query": case["query"],
+            "response": text, "abstained": abstained, "latency_s": round(latency, 3),
+            "tokens": res["trace"]["total_tokens"],
+        }
+        if case["category"] == "in_corpus":
+            row["expected_source"] = case["expected_source"]
+            row["correct"] = (not abstained) and contains_keyword(text, case["expected_keywords"])
+            if level >= 1:
+                row["retrieved_docs"] = res["retrieved_docs"]
+                row["recall_doc@5"] = case["expected_source"] in res["retrieved_docs"]
+                row["recall_passage@5"] = any(contains_keyword(ch["content"], case["expected_keywords"])
+                                              for ch in res["retrieved_chunks"])
+                row["cites_expected_source"] = case["expected_source"] in res["citations_valides"]
+        if level >= 1:
+            row["citations"] = res["citations"]
+            row["citations_invalides"] = res["citations_invalides"]
+            row["retrieved_chunks"] = [ch["chunk_id"] for ch in res["retrieved_chunks"]]
+        details.append(row)
+        status = "abst." if abstained else ("OK" if row.get("correct") else ("--" if "correct" in row else "rép."))
+        print(f"  [N{level}] {case['id']:<7} {status:<5} {latency:5.1f}s  {text[:70]!r}")
 
-    num_eval = len(in_corpus_cases) + len(out_corpus_cases)
-    exactitude = (correct_count / len(in_corpus_cases)) * 100 if in_corpus_cases else 0.0
-    abstention = (abstention_count / len(out_corpus_cases)) * 100 if out_corpus_cases else 0.0
-    avg_tokens = round(total_tokens / (num_eval or 1), 1)
-    avg_lat = round(total_latency / (num_eval or 1), 3)
-
-    return {
-        "recall_at_5": "—",
-        "exactitude": f"{exactitude:.1f}%",
-        "abstention": f"{abstention:.1f}%",
-        "succes_taches": "—",
-        "pass_3": "—",
-        "tokens_requete": avg_tokens,
-        "latence": f"{avg_lat}s"
+    docs = [d for d in details if d["category"] == "in_corpus"]
+    outs = [d for d in details if d["category"] == "out_of_corpus"]
+    answered = [d for d in docs if not d["abstained"]]
+    summary = {
+        "exactitude": mean([d["correct"] for d in docs]),
+        "abstention": mean([d["abstained"] for d in outs]),
+        "fausses_abstentions": mean([d["abstained"] for d in docs]),
+        "tokens_req": mean([d["tokens"] for d in details]),
+        "latence_s": mean([d["latency_s"] for d in details]),
     }
+    if level >= 1:
+        summary["recall_doc@5"] = mean([d["recall_doc@5"] for d in docs])
+        summary["recall_passage@5"] = mean([d["recall_passage@5"] for d in docs])
+        # parmi les réponses données, part qui cite le bon document
+        summary["citation_correcte"] = mean([d["cites_expected_source"] for d in answered])
+        # part des réponses (toutes catégories) contenant au moins une source inventée
+        summary["citation_inventee"] = mean([bool(d["citations_invalides"]) for d in details])
+    return {"summary": summary, "details": details}
+
+
+# --------------------------------------------------------------------------- tableau
+def markdown_table(results: Dict[int, Dict[str, Any]]) -> str:
+    lines = [
+        "| Niveau | Recall@5 (doc / passage) | Exactitude | Abstention | Fausses abst. | Citation correcte | Source inventée | Succès tâches | pass^3 | Tokens / req | Latence |",
+        "|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+    ]
+    names = {0: "0 · LLM seul", 1: "1 · RAG"}
+    for level in (0, 1):
+        if level not in results:
+            continue
+        s = results[level]["summary"]
+        recall = f"{pct(s['recall_doc@5'])} / {pct(s['recall_passage@5'])}" if level >= 1 else "—"
+        cit = pct(s["citation_correcte"]) if level >= 1 else "—"
+        inv = pct(s["citation_inventee"]) if level >= 1 else "—"
+        lines.append(
+            f"| **{names[level]}** | {recall} | {pct(s['exactitude'])} | {pct(s['abstention'])} | "
+            f"{pct(s['fausses_abstentions'])} | {cit} | {inv} | — | — | {s['tokens_req']:.0f} | {s['latence_s']:.2f}s |")
+    lines.append("| **2 · Agent** | … | … | … | … | … | … | … | … | … | … |")
+    lines.append("| **3 · Extension** | … | … | … | … | … | … | … | … | … | … |")
+    return "\n".join(lines)
+
+
+def ablation_table(abl: Dict[str, Dict[str, float]]) -> str:
+    lines = ["| Retriever | Recall@1 (doc) | Recall@5 (doc) | Recall@5 (passage) |", "|:---|:---:|:---:|:---:|"]
+    for mode, m in abl.items():
+        lines.append(f"| {mode} | {pct(m['recall_doc@1'])} | {pct(m['recall_doc@5'])} | {pct(m['recall_passage@5'])} |")
+    return "\n".join(lines)
 
 
 def main():
-    print("=" * 80)
-    print("   ÉVALUATION DU SYSTÈME GÉNÉRATIF (Dr. Issam Falih - Promo 2026)")
-    print("   SEMAINE 1 (2 – 8 nov.) : Thème, Corpus, Jeu de test, Niveau 0")
-    print("   Parcours : Texte - Assistant Aides Étudiantes & CROUS")
-    print("=" * 80)
-    
-    cases = load_test_cases()
-    print(f"Jeu de test initialisé : {len(cases)} cas au total dans tests.jsonl.")
-    
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--levels", default="0,1", help="niveaux à évaluer, ex. 0,1")
+    ap.add_argument("--retriever", default="hybrid", choices=["bm25", "dense", "hybrid"])
+    ap.add_argument("--limit", type=int, default=0, help="nombre max de cas par catégorie (0 = tous)")
+    args = ap.parse_args()
+    levels = [int(x) for x in args.levels.split(",") if x.strip()]
+
     client = UnifiedLLMClient()
-    print(f"Fournisseur LLM actif : {client.provider} (modèle : {client.model})")
+    if client.is_mock:
+        raise SystemExit("Refus : le mode mock ne produit pas de vraies réponses. "
+                         "Lancez Ollama (LLM_PROVIDER=ollama) ou configurez une clé d'API.")
 
-    # Évaluation du Niveau 0 (Baseline)
-    res_l0 = evaluate_level_0(client, cases)
+    cases = load_test_cases()
+    doc_cases = [c for c in cases if c["category"] == "in_corpus"]
+    abs_cases = [c for c in cases if c["category"] == "out_of_corpus"]
+    if args.limit:
+        doc_cases, abs_cases = doc_cases[:args.limit], abs_cases[:args.limit]
 
-    # Affichage du tableau format Markdown
-    print("\n" + "=" * 80)
-    print("TABLEAU RÉCAPITULATIF DES RÉSULTATS (attendu dans le rapport)")
-    print("=" * 80)
-    
-    header = "| Niveau | Recall@5 | Exactitude | Abstention | Succès tâches | pass^3 | Tokens / req | Latence |"
-    sep    = "|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|"
-    row_0  = f"| **0 · LLM seul** | {res_l0['recall_at_5']} | {res_l0['exactitude']} | {res_l0['abstention']} | {res_l0['succes_taches']} | {res_l0['pass_3']} | {res_l0['tokens_requete']} | {res_l0['latence']} |"
-    row_1  = f"| **1 · RAG** | … | … | … | — | — | … | … |"
-    row_2  = f"| **2 · Agent** | … | … | … | … | … | … | … |"
-    row_3  = f"| **3 · Extension** | … | … | … | … | … | … | … |"
+    print("=" * 90)
+    print(f"Évaluation · LLM {client.provider}:{client.model} · retriever {args.retriever} · top-{RAG_TOP_K}")
+    print(f"{len(doc_cases)} questions dans les documents, {len(abs_cases)} hors documents")
+    print("=" * 90)
 
-    print(header)
-    print(sep)
-    print(row_0)
-    print(row_1)
-    print(row_2)
-    print(row_3)
-    print("=" * 80)
-    print("Conclusion Semaine 1 : Le Niveau 0 (LLM seul) démontre une faible exactitude (5%)")
-    print("et une absence totale d'abstention (0%), justifiant le passage au Niveau 1 (RAG).\n")
+    client.generate("Bonjour", system_prompt="Réponds en un mot.")  # chargement du modèle hors chrono
+
+    print("\nAblation du retriever (sans LLM)...")
+    ablation = retrieval_ablation(client, doc_cases)
+
+    results: Dict[int, Dict[str, Any]] = {}
+    if 0 in levels:
+        print("\nNiveau 0 · LLM seul")
+        results[0] = run_level(0, Level0LLM(client), doc_cases, abs_cases)
+    if 1 in levels:
+        print(f"\nNiveau 1 · RAG ({args.retriever})")
+        engine = RAGEngine(client, Retriever(client, mode=args.retriever))
+        results[1] = run_level(1, engine, doc_cases, abs_cases)
+
+    table, abl = markdown_table(results), ablation_table(ablation)
+    print("\n" + table + "\n\n" + abl)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    meta = {"date": stamp, "provider": client.provider, "model": client.model,
+            "retriever": args.retriever, "top_k": RAG_TOP_K,
+            "n_in_corpus": len(doc_cases), "n_out_of_corpus": len(abs_cases)}
+    payload = {"meta": meta, "retrieval_ablation": ablation,
+               "levels": {str(k): v for k, v in results.items()}}
+    (RESULTS_DIR / f"eval_{stamp}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (RESULTS_DIR / "latest.md").write_text(
+        f"# Résultats · {stamp}\n\nLLM : `{client.provider}:{client.model}` · retriever : `{args.retriever}` · "
+        f"top-{RAG_TOP_K} · {len(doc_cases)} questions dans les documents, {len(abs_cases)} hors documents\n\n"
+        f"{table}\n\n## Ablation du retriever\n\n{abl}\n", encoding="utf-8")
+    print(f"\nRésultats enregistrés dans results/eval_{stamp}.json et results/latest.md")
 
 
 if __name__ == "__main__":

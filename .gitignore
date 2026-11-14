@@ -8,3 +8,7 @@ venv/
 .streamlit/
 
 exports/
+
+# Cache des embeddings (recalculé automatiquement)
+data/index/
+results/*.log
