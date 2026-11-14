@@ -20,7 +20,7 @@ class Level0LLM:
         self.client = client
 
     def process(self, query: str) -> Dict[str, Any]:
-        trace = ExecutionTrace(level=0, query=query)
+        trace = ExecutionTrace(level=0, query=query, model=f"{self.client.provider}:{self.client.model}")
         trace.add_step("prompt_preparation", {"system_prompt": SYSTEM_PROMPT_LEVEL_0})
         
         # Appel LLM pur

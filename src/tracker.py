@@ -11,7 +11,8 @@ from src.config import TRACES_PATH
 
 
 class ExecutionTrace:
-    def __init__(self, level: int, query: str):
+    def __init__(self, level: int, query: str, model: str = ""):
+        self.model = model
         self.timestamp = datetime.now().isoformat()
         self.level = level
         self.query = query
@@ -49,6 +50,7 @@ class ExecutionTrace:
         return {
             "timestamp": self.timestamp,
             "level": self.level,
+            "model": self.model,
             "query": self.query,
             "response": self.response,
             "status": self.status,
