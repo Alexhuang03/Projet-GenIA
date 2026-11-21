@@ -1,6 +1,6 @@
 # Un système génératif qui se mesure : Assistant Aides Étudiantes & CROUS
 **Projet Mineur IA Générative 2026 · Dr. Issam Falih**  
-**Parcours : Texte · Avancement : Semaine 2 (9 – 15 nov.) — Niveaux 0 et 1**
+**Parcours : Texte · Niveaux 0 à 3**
 
 ---
 
@@ -13,8 +13,8 @@
 |:---|:---|:---:|
 | S1 (2 – 8 nov.) | Thème, corpus, jeu de test de 40 cas, Niveau 0 (LLM seul) | ✅ |
 | S2 (9 – 15 nov.) | Niveau 1 : RAG, sources citées, abstention | ✅ |
-| S3 (16 – 22 nov.) | Niveau 2 : agent, confirmation des actions, traces, pass^3 | ⏳ |
-| S4 (23 – 30 nov.) | Extension, analyse des échecs, rapport et vidéo | ⏳ |
+| S3 (16 – 22 nov.) | Niveau 2 : agent, confirmation des actions, traces, pass^3 | ✅ |
+| S4 (23 – 30 nov.) | Extension ReWOO, analyse des échecs, rapport ✅ · vidéo à enregistrer | ⏳ |
 
 ---
 
@@ -81,61 +81,90 @@ Mesuré avec un vrai LLM local (`qwen2.5:7b` via Ollama, température 0). Les ch
 
 Code : [src/rag/chunking.py](src/rag/chunking.py), [src/rag/retriever.py](src/rag/retriever.py), [src/rag/engine.py](src/rag/engine.py).
 
-### Résultats mesurés (`python eval.py`)
-LLM `ollama:qwen2.5:7b`, température 0, 20 questions dans les documents et 5 hors documents. Le détail de chaque cas (réponse, passages, citations) est dans `results/eval_*.json`.
-
-| Niveau | Recall@5 (doc / passage) | Exactitude | Abstention | Fausses abst. | Citation correcte | Source inventée | Succès tâches | pass^3 | Tokens / req | Latence |
-|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **0 · LLM seul** | — | 5.0% | 20.0% | 0.0% | — | — | — | — | 253 | 4.29s |
-| **1 · RAG** | 100.0% / 100.0% | **100.0%** | **100.0%** | 0.0% | 95.0% | 0.0% | — | — | 1225 | 5.44s |
-| **2 · Agent** | … | … | … | … | … | … | … | … | … | … |
-| **3 · Extension** | … | … | … | … | … | … | … | … | … | … |
-
-Définitions :
-- **Recall@5 doc** : le fichier attendu figure parmi les 5 passages récupérés.
-- **Recall@5 passage** : un des 5 passages contient la réponse attendue.
-- **Exactitude** : la réponse contient le fait attendu et ne s'abstient pas.
-- **Fausses abst.** : abstentions sur des questions qui ont une réponse dans le corpus.
-- **Citation correcte** : la réponse cite le bon fichier.
-- **Source inventée** : la réponse cite un fichier qui n'a pas été fourni.
-
-**Ablation du retriever** (sans LLM, 20 questions dans les documents) :
-
-| Retriever | Recall@1 (doc) | Recall@5 (doc) | Recall@5 (passage) |
-|:---|:---:|:---:|:---:|
-| BM25 | 100.0% | 100.0% | 100.0% |
-| Dense (bge-m3) | 95.0% | 100.0% | 100.0% |
-| Hybride (RRF) | 100.0% | 100.0% | 100.0% |
-
 ### Ce que le RAG apporte, ce qu'il coûte, où il échoue
-- **Apport** : l'exactitude passe de 5 % à 100 % et l'abstention de 20 % à 100 %, sans aucune fausse abstention. Les réponses citent leur source et aucune source n'est inventée.
-- **Coût** : environ **4,8 fois plus de tokens** par requête (1 225 contre 253, à cause des 5 passages injectés) et **+1,2 s** de latence (5,4 s contre 4,3 s, sur GPU local).
-- **Échec observé** : sur doc_05, le modèle écrit `Source: …` sans les crochets. Le format n'est donc pas toujours respecté, et la citation n'est pas reconnue (95 % de citations correctes).
-- **Limite du protocole, à dire clairement** : les scores de 100 % montrent surtout que **le jeu de test est saturé** pour ce niveau. Les 20 questions reprennent presque mot pour mot le vocabulaire des fiches, et le corpus ne compte que 40 passages. Le Recall@5 au niveau document est presque garanti avec 6 fichiers, et l'ablation ne départage pas BM25 et l'hybride. Les questions hors documents sont, elles, très éloignées du domaine (astronautes, lamas). Il reste à mesurer des **paraphrases**, des questions qui croisent **plusieurs fiches** et des questions **proches du domaine mais absentes du corpus** (ex. « bourse au mérite », « prime d'activité »), qui sont le vrai test de l'abstention.
+- **Apport** : l'exactitude passe de 5 % à 100 % et l'abstention de 20 % à 100 %. Aucune source n'est inventée.
+- **Coût** : environ 5 fois plus de tokens par requête (1 220 contre 245) et 1,2 s de latence en plus.
+- **Échecs** : le format de citation n'est pas toujours respecté (doc_05), et le RAG répond par l'abstention aux demandes vagues ou illégales au lieu de refuser ou de demander une précision (cadrage 0 %).
 
 ---
 
-## 7. Utilisation
+## 7. Niveau 2 : agent outillé (ReAct)
+
+La boucle, l'exécuteur et la validation des actions sont écrits **sans framework** : [src/agent/loop.py](src/agent/loop.py), [src/agent/tools.py](src/agent/tools.py), [src/agent/business_rules.py](src/agent/business_rules.py).
+
+| Outil | Effet | Rôle |
+|:---|:---:|:---|
+| `rechercher_documents` | READ | Recherche hybride dans le corpus (top-5) |
+| `calculer_points_charge` | COMPUTE | Barème de la fiche 01 |
+| `estimer_echelon_bourse` | COMPUTE | Échelon indicatif, interpolé depuis les plafonds de la fiche 01 |
+| `estimer_aide_logement` | COMPUTE | Fourchette d'APL de la fiche 03 |
+| `enregistrer_simulation` | **WRITE** | Écrit le dossier dans `exports/`, **après confirmation** |
+
+Garde-fous assurés par le code :
+- boucle bornée à 8 appels LLM et 30 000 tokens ;
+- erreurs d'outils renvoyées au modèle ;
+- une seule action par tour, pour éviter les valeurs intermédiaires devinées ;
+- recherche forcée avant toute abstention ;
+- arguments et cohérence vérifiés **avant** de demander la confirmation ; sans confirmation, l'écriture est refusée.
+
+## 8. Niveau 3 : extension ReWOO (planifier puis exécuter)
+
+[src/agent/rewoo.py](src/agent/rewoo.py) corrige le symptôme mesuré au niveau 2. Un appel LLM écrit tout le plan, avec des références entre étapes (`#E1.total_points_charge`). Le code l'exécute, en parallèle pour les étapes indépendantes, et s'arrête avant toute écriture pour demander la confirmation. Un second appel LLM rédige la réponse.
+
+---
+
+## 9. Résultats
+
+Une seule commande reproduit le tableau : `python eval.py` (environ 25 minutes sur GPU portable). LLM `qwen2.5:7b`, 40 cas, tâches en 3 essais à température 0,7.
+
+| Niveau | Recall@5 | MRR | Exactitude | Abstention | Cadrage | Citation correcte | Fidélité | Succès tâches | pass^3 | Appels LLM / req | Tokens / req | Latence |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **0 · LLM seul** | — | — | 5 % | 20 % | 80 % | — | — | — | — | 1,0 | 245 | 4,09 s |
+| **1 · RAG** | 100 % | 1,00 | 100 % | 100 % | 0 % | 95 % | 100 % | — | — | 1,0 | 1 220 | 5,25 s |
+| **2 · Agent ReAct** | 100 % | 1,00 | 90 % | 100 % | 100 % | 61 % | 100 % | 60 % | 50 % | 2,3 | 3 574 | 9,11 s |
+| **3 · ReWOO** | 100 % | 1,00 | 95 % | 100 % | 100 % | 89 % | 100 % | 80 % | 80 % | 2,0 | 2 282 | 8,54 s |
+
+Sur les 10 tâches, ReWOO fait **2,0 appels LLM au lieu de 2,7, 46 % de tokens en moins et 14 % de latence en moins** que ReAct. **Aucune écriture n'a eu lieu sans confirmation.**
+
+Le détail est dans `results/` : `latest.md` (tableaux), `eval_20261121_144514.json` (réponses et contrôles de chaque cas), `traces_20261121_144514.jsonl` (étapes, outils, arguments, tokens et durée de chaque exécution).
+
+### Limites à garder en tête
+- **Jeu de test facile pour la recherche** : Recall@5 et MRR sont saturés et ne départagent pas les méthodes.
+- **Pas de jeu de développement séparé** : prompts et garde-fous ont été ajustés après avoir observé des cas du jeu de test, donc les niveaux 2 et 3 sont probablement optimistes.
+- **Petit échantillon** : l'écart de pass^3 entre ReAct et ReWOO représente 3 tâches sur 10.
+- **Mesures par règles** : la fidélité contrôle les nombres, pas le sens des reformulations.
+- **Échelon indicatif** : les plafonds intermédiaires sont interpolés, et les montants 2024-2025 restent à revérifier auprès du CROUS avant tout usage réel.
+- **Une confirmation ne prouve pas la justesse** : sur task_01, ReWOO propose un dossier faux (4 points au lieu de 5) qu'un étudiant pourrait valider.
+
+L'analyse de cinq échecs est dans le rapport : [report/rapport.pdf](report/rapport.pdf).
+
+---
+
+## 10. Utilisation
 
 ### Installation
 ```bash
 pip install -r requirements.txt
 # LLM local (Ollama, https://ollama.com) :
-ollama pull qwen2.5:7b    # génération
+ollama pull qwen2.5:7b    # génération et appel d'outils
 ollama pull bge-m3        # embeddings du retriever dense
 ```
-Un autre fournisseur (Groq, Gemini, OpenAI) peut être choisi via `LLM_PROVIDER` : voir `.env.example`.
 
 ### Reproduire l'évaluation
 ```bash
-python eval.py                          # niveaux 0 et 1, retriever hybride
-python eval.py --levels 1 --retriever bm25
-python eval.py --limit 3                # essai rapide
+python eval.py                 # niveaux 0 à 3
+python eval.py --levels 2,3    # seulement les agents
+python eval.py --limit 2       # essai rapide
 ```
-Les résultats sont écrits dans `results/latest.md` et `results/eval_<horodatage>.json`, et chaque requête est tracée dans `data/traces.jsonl`.
 
-### Interface Streamlit (Niveaux 0 et 1)
+### Interface Streamlit (niveaux 0 à 3)
 ```bash
 streamlit run app.py
 ```
-L'interface affiche les passages récupérés, les sources citées et la trace de chaque requête.
+L'interface montre la réponse, les sources, les coûts et la trace de chaque exécution, et demande une confirmation avant toute action irréversible.
+
+### Régénérer le rapport
+```bash
+python report/make_diagram.py
+python report/build_report.py   # reprend les chiffres du dernier résultat
+```

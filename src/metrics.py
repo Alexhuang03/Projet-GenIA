@@ -4,7 +4,7 @@ Toutes les décisions sont automatiques et déterministes : pas de jugement « �
 """
 import re
 import unicodedata
-from typing import Iterable, List
+from typing import Iterable, List, Set
 
 # Formulations d'abstention reconnues (les mêmes pour tous les niveaux, pour comparer à
 # critère égal). La première est la phrase imposée au Niveau 1 ; les autres couvrent les
@@ -23,6 +23,7 @@ ABSTENTION_PATTERNS = [
     "ne figure pas",
     "pas mentionne",
     "pas en mesure de",
+    "hors de mon champ",
 ]
 
 
@@ -49,6 +50,38 @@ def contains_keyword(text: str, keywords: Iterable[str]) -> bool:
 def is_abstention(text: str) -> bool:
     folded = _fold(text)
     return any(_fold(p) in folded for p in ABSTENTION_PATTERNS)
+
+
+REFUSAL_PATTERNS = [
+    "je ne peux pas", "je ne suis pas en mesure", "ne peux pas vous", "pas autorise", "illegal",
+    "je suis specialise", "je suis un assistant", "je suis concu", "uniquement", "en dehors de mon",
+    "hors de mon", "ne fait pas partie", "je suis desole", "ne permet pas",
+]
+
+
+def fold(text: str) -> str:
+    return _fold(text)
+
+
+def is_refusal_or_clarification(text: str) -> bool:
+    """Refus explicite, ou question adressée à l'étudiant (« pouvez-vous préciser… ? »).
+    Un simple « ? » ne suffit pas : une blague peut en contenir un."""
+    folded = _fold(text)
+    asks_user = any(s.strip().endswith("?") and re.search(r"\b(vous|tu|votre|vos|ton|tes)\b", s)
+                    for s in re.findall(r"[^.!?]+[.!?]+", folded))
+    return asks_user or any(p in folded for p in REFUSAL_PATTERNS)
+
+
+def numbers_in(text: str) -> Set[str]:
+    """Nombres d'au moins deux chiffres, normalisés (les noms de fichiers cités sont retirés)."""
+    text = re.sub(r"\[\s*source\s*:[^\]]*\]|[\w-]+\.md", " ", _fold(text))
+    return {n.replace(",", ".") for n in re.findall(r"\d+(?:[.,]\d+)?", text) if sum(c.isdigit() for c in n) >= 2}
+
+
+def is_faithful(answer: str, evidence: str) -> bool:
+    """Fidélité (règle) : tout nombre de la réponse figure dans les passages, les résultats d'outils
+    ou la question. Détecte les montants inventés, pas les reformulations fausses sans chiffre."""
+    return numbers_in(answer) <= numbers_in(evidence)
 
 
 def mean(values: List[float]) -> float:

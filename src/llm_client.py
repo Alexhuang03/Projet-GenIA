@@ -9,7 +9,9 @@ Client LLM unifié multi-fournisseurs :
 Choix important : une erreur d'appel lève une exception au lieu de basculer silencieusement
 sur le mock, pour qu'une panne réseau ne puisse pas fausser une évaluation.
 """
+import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -31,6 +33,18 @@ class LLMResponse:
         self.completion_tokens = completion_tokens
         self.total_tokens = prompt_tokens + completion_tokens
         self.tool_calls = tool_calls or []
+
+
+def _parse_text_tool_call(content: str) -> Optional[Dict[str, Any]]:
+    """Récupère un appel d'outil écrit en JSON dans le texte de la réponse, s'il y en a un."""
+    m = re.search(r'\{\s*"name"\s*:\s*"\w+"\s*,\s*"arguments"\s*:', content)
+    if not m:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(content[m.start():])
+    except ValueError:
+        return None
+    return {"name": obj["name"], "arguments": obj.get("arguments") or {}}
 
 
 class UnifiedLLMClient:
@@ -135,6 +149,38 @@ class UnifiedLLMClient:
         usage = data.get("usage", {})
         return LLMResponse(data["choices"][0]["message"]["content"],
                            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+
+    # ------------------------------------------------------------------ appel d'outils
+    def chat(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None,
+             temperature: float = LLM_TEMPERATURE, seed: int = LLM_SEED, json_mode: bool = False) -> LLMResponse:
+        """Conversation multi-tours avec appel d'outils natif (Ollama). Utilisé par les niveaux 2 et 3.
+        Les tool_calls sont renvoyés au format {"name": str, "arguments": dict}."""
+        if self.provider != "ollama":
+            raise LLMError("Les niveaux 2 et 3 sont implémentés pour Ollama (appel d'outils natif).")
+        payload: Dict[str, Any] = {
+            "model": self.model, "messages": messages, "stream": False,
+            "options": {"temperature": temperature, "seed": seed, "num_ctx": 8192},
+        }
+        if tools:
+            payload["tools"] = tools
+        if json_mode:
+            payload["format"] = "json"
+        try:
+            with httpx.Client(timeout=300.0) as client:
+                res = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+                res.raise_for_status()
+                data = res.json()
+        except Exception as e:
+            raise LLMError(f"Appel Ollama échoué ({self.model}) : {e}") from e
+        msg = data["message"]
+        calls = [{"name": c["function"]["name"], "arguments": c["function"].get("arguments") or {}}
+                 for c in msg.get("tool_calls") or []]
+        content = msg.get("content", "")
+        if tools and not calls:
+            recovered = _parse_text_tool_call(content)
+            if recovered:  # le modèle a écrit son appel d'outil dans le texte au lieu du champ prévu
+                calls, content = [recovered], ""
+        return LLMResponse(content, data.get("prompt_eval_count", 0), data.get("eval_count", 0), tool_calls=calls)
 
     # ------------------------------------------------------------------ embeddings
     def embed(self, texts: List[str], model: str = EMBEDDING_MODEL) -> List[List[float]]:

@@ -1,0 +1,57 @@
+<html><body>
+<h1>Un système génératif qui se mesure : assistant Aides étudiantes &amp; CROUS</h1>
+<p class="sub">Mineur IA générative 2026 · Dr. Issam Falih · Parcours Texte · Alex Huang</p>
+
+<h2>1. Parcours et cas d'usage</h2>
+<p>Un étudiant se demande à quelles aides il a droit : bourse sur critères sociaux, logement et garantie Visale, APL, aides d'urgence, mobilité. Les règles sont dispersées et les montants précis ; une réponse plausible mais fausse peut coûter une aide. L'assistant répond donc à partir de <b>6 fiches documentaires</b>, cite ses sources, s'abstient quand l'information manque, calcule une simulation (points de charge, échelon, fourchette d'APL) et n'enregistre un dossier <b>qu'après confirmation de l'étudiant</b>. Le système est construit en quatre niveaux, tous disponibles dans l'interface Streamlit et évalués sur le même protocole par une seule commande, <code>python eval.py</code>.</p>
+
+<h2>2. Architecture</h2>
+<img src="architecture.png" width="520"/>
+<p class="small">Tout tourne en local (RTX 5070 portable, 8 Go). La boucle de l'agent, l'exécuteur d'outils, la validation des actions et l'évaluation sont écrits sans framework.</p>
+
+<h2>3. Choix justifiés par des mesures</h2>
+<ul>
+<li><b>Modèle : qwen2.5:7b via Ollama.</b> Modèle ouvert, gratuit, avec appel d'outils natif ; il tient sur 8 Go de mémoire vidéo. Température 0 pour les questions, 0,7 sur les tâches : à 0, les trois essais de pass^3 seraient identiques.</li>
+<li><b>Découpage par section Markdown (40 passages).</b> Une section correspond à une règle (un barème, une condition). Chaque passage garde son chemin de titres pour rester compréhensible seul.</li>
+<li><b>Recherche hybride BM25 + bge-m3 (fusion RRF).</b> bge-m3 est multilingue, adapté au français. Sur nos 20 questions, BM25 et l'hybride placent le bon document en tête dans 100 % des cas, contre 95 % pour le dense seul (tableau 3). L'hybride ne se distingue donc pas de BM25 ici : nous le gardons pour les reformulations, sans pouvoir en prouver le gain sur ce jeu de test.</li>
+<li><b>RAG (niveau 1).</b> L'exactitude passe de 5 % à 100 % et l'abstention de 20 % à 100 %, pour 5 fois plus de tokens et environ 1,2 s de latence en plus.</li>
+<li><b>Agent ReAct (niveau 2).</b> Cinq outils décrits par schéma JSON et classés par effet (READ, COMPUTE, WRITE). Boucle bornée à 8 appels LLM et 30 000 tokens ; les erreurs d'outils sont renvoyées au modèle. Deux garde-fous ont été ajoutés après observation : une seule action par tour, car le modèle enchaînait les outils avec des valeurs intermédiaires devinées, et une recherche forcée avant toute abstention, car il s'abstenait sans chercher sur 10 questions sur 20.</li>
+<li><b>Contrôle des actions.</b> Les règles métier sont en code. Avant de demander la confirmation, l'exécuteur vérifie les arguments et que les points de charge à enregistrer ont bien été calculés par l'outil. Sans confirmation, il refuse d'écrire : <b>0 écriture non confirmée</b> sur toute l'évaluation.</li>
+<li><b>Extension : planification ReWOO (niveau 3).</b> Choisie pour corriger le symptôme mesuré au niveau 2 : valeurs intermédiaires devinées et tours de boucle coûteux. Un appel LLM écrit tout le plan, avec des références entre étapes (<code>#E1.total_points_charge</code>) ; le code l'exécute, en parallèle pour les étapes indépendantes ; un second appel rédige la réponse.</li>
+</ul>
+
+<h2>4. Protocole et résultats</h2>
+<p><b>Jeu de test figé de 40 cas</b> : 20 réponses dans les documents, 5 absentes, 10 tâches en plusieurs étapes, 5 demandes ambiguës ou hors sujet. L'exactitude, l'abstention, le cadrage et la fidélité sont jugés par des règles déterministes. La fidélité vérifie que chaque nombre de la réponse figure dans les passages, les résultats d'outils ou la question. Une tâche réussit si l'<b>état final</b> est correct selon le code : résultats des outils, fichier écrit, confirmation, aucune donnée inventée, total donné à l'étudiant. pass^3 exige que les 3 essais d'une tâche réussissent. {{META}}</p>
+<p class="small"><b>Tableau 1 · Niveaux 0 à 3.</b> Coûts moyens sur toutes les requêtes du niveau (les agents incluent les tâches).</p>
+{{TABLE_NIVEAUX}}
+<p class="small"><b>Tableau 2 · Agents sur les 10 tâches</b> (3 essais par tâche, coûts par tâche).</p>
+{{TABLE_AGENTS}}
+<p class="small"><b>Tableau 3 · Comparaison des méthodes de recherche</b> (20 questions, sans LLM).</p>
+{{TABLE_ABLATION}}
+<h3>Ce que chaque niveau apporte, coûte, et où il échoue</h3>
+<ul>
+<li><b>RAG :</b> c'est le meilleur niveau pour les questions documentaires, et le moins cher après le LLM seul. Il ne sait toutefois pas cadrer : il répond par l'abstention aux demandes vagues ou illégales (cadrage 0 %), sans refuser ni demander de précision.</li>
+<li><b>Agent ReAct :</b> il ajoute les tâches et le cadrage (100 %), mais coûte environ 3 fois les tokens du RAG et <b>perd en qualité documentaire</b> : exactitude 90 %, citation correcte 61 %. Choisir un agent pour une simple question serait donc un mauvais compromis.</li>
+<li><b>ReWOO :</b> face à ReAct sur les tâches, le pass^3 passe de 50 % à 80 %, avec 2,0 appels LLM au lieu de 2,7, <b>46 % de tokens en moins</b> et 14 % de latence en moins. L'exactitude (95 %) et les citations (89 %) progressent aussi. L'écart de pass^3 représente 3 tâches sur 10 : il est encourageant, mais l'échantillon reste petit.</li>
+</ul>
+
+<h2 style="page-break-before: always">5. Analyse de cinq échecs</h2>
+<table>
+<tr><th>Cas · niveau</th><th>Ce qui s'est passé</th><th>Cause</th><th>Correction possible</th></tr>
+<tr><td><b>doc_01</b> · N0</td><td>Échelon 0bis annoncé à 1 020,50 € au lieu de 1 454 €, sans réserve.</td><td>Sans documents, le modèle produit un montant plausible.</td><td>C'est le problème que corrige le RAG (niveau 1).</td></tr>
+<tr><td><b>doc_07</b> · N2</td><td>Abstention sur l'Avance Loca-Pass, alors que la bonne fiche a été récupérée (réponse : 1 200 €).</td><td>Après l'appel d'outil, le modèle lit mal les passages et retombe sur la phrase d'abstention.</td><td>Vérifier l'abstention par un second passage ciblé sur le meilleur extrait.</td></tr>
+<tr><td><b>doc_09</b> · N3</td><td>Réponse correcte sur la perte des allocations, suivie de « Je ne dispose pas de cette information ».</td><td>Le prompt du solveur contient la phrase d'abstention et le modèle la recopie.</td><td>En code : retirer cette phrase quand la réponse contient déjà des faits sourcés.</td></tr>
+<tr><td><b>task_05</b> · N2 et N3</td><td>« 1 sœur dans le supérieur » comptée comme sœur à charge : 1 point au lieu de 2, sur les 6 essais.</td><td>Formulation elliptique mal extraite. Le calcul est juste, mais ses entrées sont fausses.</td><td>Faire valider les paramètres extraits par l'étudiant avant le calcul.</td></tr>
+<tr><td><b>task_01</b> · N3</td><td>Sœur au collège oubliée, revenu de 20 000 € <b>copié de l'exemple du prompt</b>, puis dossier enregistré avec 4 points au lieu de 5 (3 essais sur 3).</td><td>Le planificateur recopie son exemple. Notre règle vérifie que les points viennent de l'outil, pas que ses entrées sont vraies.</td><td>Exiger que chaque valeur du plan figure dans la demande ; afficher toutes les entrées dans la confirmation.</td></tr>
+</table>
+
+<h2>6. Limites et coût</h2>
+<ul>
+<li><b>Jeu de test trop facile pour la recherche.</b> Les questions reprennent le vocabulaire des fiches et le corpus est petit : Recall@5 et MRR sont saturés et ne départagent pas les méthodes. Les 100 % du RAG ne garantissent pas ce score sur des paraphrases ou des questions proches du domaine mais absentes du corpus.</li>
+<li><b>Pas de jeu de développement séparé.</b> Les prompts et les garde-fous ont été ajustés après avoir observé des cas du jeu de test : les scores des niveaux 2 et 3 sont donc probablement optimistes.</li>
+<li><b>Mesures par règles.</b> La fidélité contrôle les nombres, pas le sens d'une reformulation. Les détecteurs d'abstention et de cadrage reposent sur des motifs de texte, relus à la main sur cette évaluation, sans juge LLM calibré.</li>
+<li><b>Estimation d'échelon indicative.</b> Le corpus ne donne les plafonds que pour 0 et 4 points et pour les échelons 0bis et 7 : les autres valeurs sont interpolées linéairement. Les montants sont ceux de 2024-2025 et doivent être revérifiés auprès du CROUS avant tout usage réel.</li>
+<li><b>La confirmation ne prouve pas la justesse.</b> Elle empêche toute écriture non validée, mais un étudiant peut valider un dossier faux (task_01). ReWOO ne replanifie pas non plus lorsqu'une étape échoue.</li>
+<li><b>Coût.</b> Aucun coût d'API : tout tourne en local. Le coût se lit en tokens et en latence : environ 245 tokens et 4,1 s par requête au niveau 0, 1 220 tokens et 5,3 s au niveau 1, et environ 2 150 à 4 000 tokens et 9 à 10,5 s par tâche pour les agents.</li>
+</ul>
+</body></html>

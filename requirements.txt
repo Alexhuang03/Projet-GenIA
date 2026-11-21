@@ -1,7 +1,7 @@
 # Dépendances du projet Système Génératif qui se mesure (Parcours Texte)
 streamlit>=1.35.0
-scikit-learn>=1.4.0
 numpy>=1.26.0
-pandas>=2.2.0
 httpx>=0.27.0
-pydantic>=2.7.0
+# Génération du rapport PDF
+pymupdf>=1.24.0
+matplotlib>=3.8.0

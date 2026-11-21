@@ -28,8 +28,9 @@ RAG_RRF_K = 60                # Constante de la fusion Reciprocal Rank Fusion
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
 # Paramètres Agent
-AGENT_MAX_STEPS = 5           # Nombre maximal de tours dans la boucle ReAct
-MAX_TOKENS_PER_CALL = 1000
+AGENT_MAX_STEPS = 8           # Nombre maximal d'appels LLM dans la boucle ReAct
+AGENT_MAX_TOKENS = 30000      # Budget de tokens (prompt + complétion) par requête
+TASK_TEMPERATURE = 0.7        # Température des 3 essais pass^3 (à 0, les 3 essais seraient identiques)
 
 # Paramètres LLM
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "ollama") # "ollama", "gemini", "openai", "groq", "mock"
